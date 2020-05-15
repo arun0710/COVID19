@@ -1,0 +1,100 @@
+---
+title: "COVID"
+author: "Arun Koundinya"
+output: html_document
+---
+
+This RPubs documented is created to learn more about the COVID19 Confiremed Cases for India. This link will be usually shared in my personal blog i.e.; <http://www.arunkoundinya.com>. For other and as well as related blogs request to visit my blog page. 
+
+Hope you will love the analysis and also here is the source code 
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r echo=FALSE,warning=FALSE,fig.width=9.5,message=FALSE}
+library(jsonlite)
+StatesDaily <- "https://api.covid19india.org/states_daily.json"
+StatesDaily <- fromJSON(StatesDaily)
+StatesDaily <- as.data.frame(StatesDaily)
+
+#DistrictsDaily <- "https://api.covid19india.org/districts_daily.json"
+#DistrictsDaily <- fromJSON(DistrictsDaily)
+
+TestsDaily <- "https://api.covid19india.org/state_test_data.json"
+TestsDaily <- fromJSON(TestsDaily)
+TestsDaily <- as.data.frame(TestsDaily)
+
+#TimeSeries <- "https://api.covid19india.org/data.json"
+#TimeSeries <- fromJSON(TimeSeries)
+#TodayData_Cases<-TimeSeries$statewise
+
+library(reshape2)
+StatesDaily<-melt(StatesDaily,id.vars = c("states_daily.status","states_daily.date"))
+StatesDaily<-dcast(StatesDaily,states_daily.date + variable ~ states_daily.status )
+StatesDaily$states_daily.date<-as.Date(as.character(StatesDaily$states_daily.date),format = "%d-%b-%y")
+StatesDaily<-StatesDaily[with(StatesDaily, order(variable, states_daily.date)), ]
+StatesDaily[,c("Confirmed","Deceased","Recovered")] <- sapply(StatesDaily[,c("Confirmed","Deceased","Recovered")],as.numeric)
+StatesDaily$Confirmed_Cumsum <- ave(StatesDaily$Confirmed, StatesDaily$variable, FUN=cumsum)
+StatesDaily$Deceased_Cumsum <- ave(StatesDaily$Deceased, StatesDaily$variable, FUN=cumsum)
+StatesDaily$Recovered_Cumsum <- ave(StatesDaily$Recovered, StatesDaily$variable, FUN=cumsum)
+
+StatesDaily$variable<-as.character(StatesDaily$variable)
+library(stringr)
+StatesDaily$statecode<-substring(StatesDaily$variable,nchar((StatesDaily$variable))-1,nchar((StatesDaily$variable)))
+StatesDaily$statecode<-toupper(StatesDaily$statecode)
+
+library(readxl)
+LatLongMapper <- read_excel("LatLongMapper.xlsx")
+StatesDaily<-merge(StatesDaily,LatLongMapper,by.x="statecode",by.y="statecode",all.x=TRUE)
+
+StatesDaily$start<-StatesDaily$states_daily.date
+StatesDaily$end<-StatesDaily$states_daily.date
+StatesDaily$radius<-(StatesDaily$Confirmed_Cumsum)/1000
+StatesDaily$popup<-paste(paste("State : ",StatesDaily$state,sep = "")
+                        ,paste("Confirmed : ",StatesDaily$Confirmed_Cumsum,sep = "")
+                         ,paste("Deceased : ",StatesDaily$Deceased_Cumsum,sep = "")
+                         ,paste("Recovered : ",StatesDaily$Recovered_Cumsum,sep = ""),sep="<br>\n")
+States_Daily_Geo <- geojsonio::geojson_json(StatesDaily,lat="Lat",lon="Long")
+
+
+library(leaftime)
+library(htmltools)
+library(leaflet)
+library(rgdal)
+
+states <- readOGR("../IND_adm1.shp")
+popup <- paste0("<strong>Name: </strong>", 
+                states$NAME_1)
+
+
+leaflet(States_Daily_Geo) %>%
+  addTiles() %>%
+  setView(78.435977, 23.204480, zoom = 5) %>%
+  addTimeline(width = "96%",
+    timelineOpts = timelineOptions(
+      styleOptions = NULL, # make sure default style does not override
+      pointToLayer = htmlwidgets::JS(
+        "
+        function(data, latlng) {
+         var popupOptions = {maxWidth: 200};
+         var popupContent = data.properties.popup;
+        return L.circleMarker(
+        latlng,
+    {
+      radius: +data.properties.radius,
+      color: data.properties.color,
+      fillColor: data.properties.color,
+      fillOpacity: 1
+    }
+  ).bindPopup(popupContent,popupOptions);
+        }
+        "
+      )
+    )
+  ) %>%  addPolygons(data=states, weight = 2, fillColor = "green")
+
+
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
