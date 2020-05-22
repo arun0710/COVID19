@@ -1,0 +1,276 @@
+---
+title: "COVID"
+output: html_document
+---
+
+## COVID-19 INDIA - EXPLORATORY ANALYSIS
+
+This RPubs documented is created to learn more about the COVID19 Confirmed Cases for India. This link will be usually shared in my personal blog i.e.; <http://www.arunkoundinya.com>. For other elated blogs request to visit my blog page and post your comment there. 
+
+Hope you will love the analysis and also here is the source code in the github account. <https://github.com/arun0710/COVID19> Request to post your any improvement on the code for my learning to my <a href="mailto:arun7106@icloud.com">E-Mail ID</a>
+
+### TimeSeries Interactive State-wise Map with Confirmed Cases
+
+Hope you will loved this interactive chart on Rpubs instead on RShiny :). My Wife loved this  timline bar a lot as it is just intuitive enough to know which states have comparitvely more cases than others.
+</br>
+</br>
+```{r echo=FALSE,fig.width=9.5,fig.height=7.5,message=FALSE,warning=FALSE,error=FALSE,eval=TRUE}
+library(jsonlite)
+library(leaftime)
+library(htmltools)
+library(leaflet)
+library(rgdal)
+library(reshape2)
+library(readxl)
+library(stringr)
+
+StatesDaily <- "https://api.covid19india.org/states_daily.json"
+StatesDaily <- fromJSON(StatesDaily)
+StatesDaily <- as.data.frame(StatesDaily)
+
+TestsDaily <- "https://api.covid19india.org/state_test_data.json"
+TestsDaily <- fromJSON(TestsDaily)
+TestsDaily <- as.data.frame(TestsDaily)
+
+StatesDaily<-melt(StatesDaily,id.vars = c("states_daily.status","states_daily.date"))
+StatesDaily<-dcast(StatesDaily,states_daily.date + variable ~ states_daily.status )
+StatesDaily$states_daily.date<-as.Date(as.character(StatesDaily$states_daily.date),format = "%d-%b-%y")
+StatesDaily<-StatesDaily[with(StatesDaily, order(variable, states_daily.date)), ]
+StatesDaily[,c("Confirmed","Deceased","Recovered")] <- sapply(StatesDaily[,c("Confirmed","Deceased","Recovered")],as.numeric)
+StatesDaily$Confirmed_Cumsum <- ave(StatesDaily$Confirmed, StatesDaily$variable, FUN=cumsum)
+StatesDaily$Deceased_Cumsum <- ave(StatesDaily$Deceased, StatesDaily$variable, FUN=cumsum)
+StatesDaily$Recovered_Cumsum <- ave(StatesDaily$Recovered, StatesDaily$variable, FUN=cumsum)
+
+StatesDaily$variable<-as.character(StatesDaily$variable)
+
+StatesDaily$statecode<-substring(StatesDaily$variable,nchar((StatesDaily$variable))-1,nchar((StatesDaily$variable)))
+StatesDaily$statecode<-toupper(StatesDaily$statecode)
+
+LatLongMapper <- read_excel("SupportFiles/LatLongMapper.xlsx")
+StatesDaily<-merge(StatesDaily,LatLongMapper,by.x="statecode",by.y="statecode",all.x=TRUE)
+StatesDaily<-subset(StatesDaily,!(is.na(StatesDaily$state)))
+StatesDaily$states_daily.date<-as.Date(StatesDaily$states_daily.date)
+StatesDaily$start<-StatesDaily$states_daily.date
+StatesDaily$end<-StatesDaily$states_daily.date
+StatesDaily$radius<-(StatesDaily$Confirmed_Cumsum)/1000
+StatesDaily$color<-"#0032FFFF"
+StatesDaily$popup<-paste(paste("State : ",StatesDaily$state,sep = "")
+                        ,paste("Confirmed : ",StatesDaily$Confirmed_Cumsum,sep = "")
+                         ,paste("Deceased : ",StatesDaily$Deceased_Cumsum,sep = "")
+                         ,paste("Recovered : ",StatesDaily$Recovered_Cumsum,sep = ""),sep="<br>\n")
+
+States_Daily_Geo <- geojsonio::geojson_json(StatesDaily,lat="Lat",lon="Long")
+
+states <- readOGR("IndiaMaps/IND_adm1.shp",verbose = FALSE)
+
+leaflet(States_Daily_Geo) %>%
+  addTiles() %>%
+  setView(78.435977, 23.204480, zoom = 5) %>%
+  addTimeline(width = "25%",
+    timelineOpts = timelineOptions(
+      styleOptions = NULL, # make sure default style does not override
+      pointToLayer = htmlwidgets::JS(
+        "
+        function(data, latlng) {
+         var popupOptions = {maxWidth: 200};
+         var popupContent = data.properties.popup;
+        return L.circleMarker(
+        latlng,
+    {
+      radius: +data.properties.radius,
+      color: data.properties.color,
+      fillColor: data.properties.color,
+      fillOpacity: 1
+    }
+  ).bindPopup(popupContent,popupOptions);
+        }
+        "
+      )
+    )
+  ) %>%  addPolygons(data=states, weight = 2, fillColor = "green")
+```
+
+
+### Interactive State-wise LogScale & Linear Scale of Confirmed Cases as on Date
+
+Below is a Linear & Log Scale Graph of the Confirmed Cases Over Time; The Log Scale Graph has became more popular to highlight the concept of flatenning the curve. If we start playing around these dropdowns we can draw more insights which state has started early corrections with preperation like Kerala.
+</br>
+</br>
+```{r echo=FALSE,fig.width=9.5,fig.height=7.5,message=FALSE,warning=FALSE,error=FALSE,eval=TRUE}
+library(plotly)
+
+ConfirmedbyState<-dcast(StatesDaily[,c("states_daily.date","state","Confirmed_Cumsum")],states_daily.date ~ state)
+
+cols <- names(ConfirmedbyState[,c(2:ncol(ConfirmedbyState))])
+
+p <- plot_ly(ConfirmedbyState,
+             type = "scatter",
+             mode = "lines",
+             x = ~as.Date(states_daily.date), 
+             y= ~as.numeric(ConfirmedbyState[[cols[[34]]]]), 
+             name = cols[[34]])
+## Add arbitrary number of traces
+## Ignore first col as it has already been added
+for (col in cols[-1]) {
+  p <- p %>% add_lines(x = ~as.Date(states_daily.date), y = ConfirmedbyState[[col]], name = col, visible = FALSE)
+}
+
+p <- p %>%
+  layout(
+    title = "Log/Linear Graph of Confirmed Cases Over Time",
+    xaxis = list(title = "Date"),
+    yaxis = list(title = "Confirmed Cases As on Date"),
+    updatemenus = list(
+      list(active=0,
+           y = 1.0,
+           ## Add all buttons at once
+           buttons = list(
+             list(label = 'linear',
+                  method = 'update',
+                  args = list(list(visible = c(T,F)), list(yaxis = list(type = 'linear')))),
+             list(label = 'log',
+                  method = 'update', 
+                  args = list(list(visible = c(F,T)), list(yaxis = list(type = 'log')))))),
+        
+      list(active=33,
+        y = 0.7,
+        ## Add all buttons at once
+        buttons = lapply(cols, function(col) {
+          list(method="restyle", 
+               args = list("visible", cols == col),
+               label = col)
+        })
+      )
+    )
+  )
+p
+```
+
+
+
+### Understanding the Relationship between the Tests & Confirmed Cases Over Time
+
+Below graph communicates to us very clearly; How well Tests and Confirmed cases are correlated to a larger extend in Indian Sub-Continent.
+</br>
+</br>
+```{r echo=FALSE,fig.width=9.5,fig.height=7.5,message=FALSE,warning=FALSE,error=FALSE,eval=TRUE}
+
+ConfirmedbyState<-dcast(StatesDaily[,c("states_daily.date","state","Confirmed")],states_daily.date ~ state)
+ConfirmedbyState<-ConfirmedbyState[,c(-10,-37,-40)]
+
+TestsDaily$states_tested_data.updatedon<- as.Date(TestsDaily$states_tested_data.updatedon,format="%d/%m/%y")
+TestsDaily$states_tested_data.totaltested<-as.numeric(TestsDaily$states_tested_data.totaltested)
+TestsDaily<-TestsDaily[with(TestsDaily, order(states_tested_data.state,states_tested_data.updatedon)), ]
+TestsDaily$Diff<-c(1,diff(TestsDaily$states_tested_data.updatedon))
+TestsDaily<-subset(TestsDaily,TestsDaily$Diff!=0)
+
+TestsDaily_Tests<-dcast(TestsDaily[,c("states_tested_data.updatedon","states_tested_data.state","states_tested_data.totaltested")],
+                  states_tested_data.updatedon ~ states_tested_data.state,sum)
+TestsDaily_Tests$Total<-rowSums(TestsDaily_Tests[,c(2:ncol(TestsDaily_Tests))],na.rm = TRUE)
+TestsDaily_Tests<-subset(TestsDaily_Tests,TestsDaily_Tests$states_tested_data.updatedon>="2020-04-01" & TestsDaily_Tests$Total>0)
+TestTill_DayBefore <- read_excel("SupportFiles/TestDaily_Test.xlsx")
+TestTill_DayBefore$states_tested_data.updatedon<- as.Date(TestTill_DayBefore$states_tested_data.updatedon)
+TodayTest<-subset(TestsDaily_Tests,TestsDaily_Tests$states_tested_data.updatedon==Sys.Date()-1)
+YesterdayTest<-subset(TestTill_DayBefore,TestTill_DayBefore$states_tested_data.updatedon==Sys.Date()-2)
+
+Compare<-rbind(YesterdayTest,TodayTest)
+Compare<-as.data.frame(t(Compare))
+Compare[,1]<-as.numeric(as.character(Compare[,1]))
+Compare[,2]<-as.numeric(as.character(Compare[,2]))
+Compare<-mutate(Compare, C=pmax(Compare[,1],Compare[,2]))
+Compare<-as.data.frame(t(Compare))
+Compare<-Compare[3,]
+names(Compare)<-names(TestsDaily_Tests)
+Compare$states_tested_data.updatedon<-as.Date(Compare$states_tested_data.updatedon,origin="1970-01-01")
+Compare[1,1]<-as.Date(Sys.Date()-1)
+
+TestTill_DayBefore<-subset(TestTill_DayBefore,TestTill_DayBefore$states_tested_data.updatedon<=Sys.Date()-2)
+
+TestsDaily_TillToday<-rbind(TestTill_DayBefore,Compare)
+TestsDaily_TillToday$Total<-rowSums(TestsDaily_TillToday[,c(2:36)],na.rm = TRUE)
+names(TestsDaily_TillToday)<-names(TestsDaily_Tests)
+
+rm(Compare,TestsDaily_Tests,p,TestTill_DayBefore,TodayTest,YesterdayTest,col,cols,popup)
+
+#writexl::write_xlsx(TestsDaily_TillToday,"SupportFiles/TestDaily_Test.xlsx")
+names(TestsDaily_TillToday)[2]<-names(ConfirmedbyState)[2]
+names(TestsDaily_TillToday)[9]<-names(ConfirmedbyState)[9]
+TestsDaily_TillToday_Incr<-data.frame(diff(as.matrix(TestsDaily_TillToday[,c(2:37)])))
+names(TestsDaily_TillToday_Incr)<-names(TestsDaily_TillToday)[c(2:37)]
+TestsDaily_TillToday_Incr$Date<-TestsDaily_TillToday$states_tested_data.updatedon[2:nrow(TestsDaily_TillToday)]
+
+ConfirmedbyState<-subset(ConfirmedbyState,ConfirmedbyState$states_daily.date %in% TestsDaily_TillToday_Incr$Date)
+TestsDaily_TillToday_Incr<-subset(TestsDaily_TillToday_Incr,TestsDaily_TillToday_Incr$Date %in% ConfirmedbyState$states_daily.date)
+TestsDaily_TillToday_Incr<-TestsDaily_TillToday_Incr[,c(37,1:36)]
+
+ConfirmedbyState<-melt(ConfirmedbyState,id=c("states_daily.date"))
+names(ConfirmedbyState)[3]<-"ConfirmedCases"
+TestsDaily_TillToday_Incr<-melt(TestsDaily_TillToday_Incr,id=c("Date"))
+names(TestsDaily_TillToday_Incr)[3]<-"Tests"
+
+PlottingFrame<-merge(ConfirmedbyState,TestsDaily_TillToday_Incr,by.x=c("states_daily.date","variable"),
+                     by.y=c("Date","variable"),all.x=TRUE)
+
+names(PlottingFrame)[2]<-"State"
+
+
+fig <- plot_ly(subset(PlottingFrame,PlottingFrame$State=="Total"))
+fig <- fig %>% add_trace(x = ~states_daily.date, y = ~ConfirmedCases, type = 'bar', name = 'ConfirmedCases',
+                         marker = list(color = '#C9EFF9'),
+                         hoverinfo = "text",
+                         text = ~ConfirmedCases)
+
+fig <- fig %>% add_trace(x = ~states_daily.date, y = ~Tests, type = 'scatter', mode = 'lines', name = 'Total_TotalTests', yaxis = 'y2',
+                         line = list(color = '#45171D'),
+                         hoverinfo = "text",
+                         text = ~Tests)
+fig <- fig %>% layout(title = 'Daily Confirmed Cases vs Daily Tests',
+                      xaxis = list(title = ""),
+                      yaxis = list(side = 'left', title = 'Confirmed Cases', showgrid = FALSE, zeroline = FALSE),
+                      yaxis2 = list(side = 'right', overlaying = "y", title = 'Daily Tests', showgrid = FALSE, zeroline = FALSE))
+
+
+fig
+```
+
+
+Comparision of few states on Positivity Rate; Increased Testing Rate vs Confrimed Increasing Rate over Recent Days
+</br>
+</br>
+```{r echo=FALSE,fig.width=9.5,fig.height=7.5,message=FALSE,warning=FALSE,error=FALSE,eval=TRUE}
+
+PlottingFrame<-subset(PlottingFrame,PlottingFrame$states_daily.date==Sys.Date()-2 | PlottingFrame$states_daily.date==Sys.Date()-4)
+
+PlottingFrame<-melt(PlottingFrame,id=c("states_daily.date","State"))
+PlottingFrame<-dcast(PlottingFrame, State ~ states_daily.date + variable)
+PlottingFrame$ConfirmedIncr<-round(round(((PlottingFrame[,4]-PlottingFrame[,2])/PlottingFrame[,2])*100,2)/2,2)
+PlottingFrame$TestIncr<-round(round(((PlottingFrame[,5]-PlottingFrame[,3])/PlottingFrame[,3])*100,2)/2,2)
+PlottingFrame$LatestPositivityRate<-round(((PlottingFrame[,4])/PlottingFrame[,5])*100,2)
+
+PlottingFrame<-subset(PlottingFrame,PlottingFrame[,4]>10 & PlottingFrame$LatestPositivityRate > 0)
+
+library(plotly)
+
+
+fig <- plot_ly(
+  type = 'table',
+  header = list(
+    values = c(names(PlottingFrame)),
+    align = c('left', rep('center', ncol(PlottingFrame))),
+    line = list(width = 1, color = 'black'),
+    fill = list(color = 'rgb(235, 100, 230)'),
+    font = list(family = "Arial", size = 12, color = "white")
+  ),
+  cells = list(
+    values = rbind(
+      t(as.matrix(unname(PlottingFrame)))
+    ),
+    align = c('left', rep('center', ncol(PlottingFrame))),
+    line = list(color = "black", width = 1),
+    fill = list(color = c('rgb(235, 193, 238)', 'rgba(228, 222, 249, 0.65)')),
+    font = list(family = "Arial", size = 12, color = c("black"))
+  ))
+
+fig
+```
+
