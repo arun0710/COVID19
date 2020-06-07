@@ -158,7 +158,7 @@ Below graph communicates to us very clearly; How well Tests and Confirmed cases 
 ```{r echo=FALSE,fig.width=9.5,fig.height=7.5,message=FALSE,warning=FALSE,error=FALSE,eval=TRUE}
 
 ConfirmedbyState<-dcast(StatesDaily[,c("states_daily.date","state","Confirmed")],states_daily.date ~ state)
-ConfirmedbyState<-ConfirmedbyState[,c(-10,-37,-40)]
+ConfirmedbyState<-ConfirmedbyState[,c(-10)]
 
 TestsDaily$states_tested_data.updatedon<- as.Date(TestsDaily$states_tested_data.updatedon,format="%d/%m/%y")
 TestsDaily$states_tested_data.totaltested<-as.numeric(TestsDaily$states_tested_data.totaltested)
@@ -293,6 +293,168 @@ fviz_cluster(hc.cut,ellipse.type = "convex",geom="text",xlab="Positivity Rate",y
 This RPubs documented is created to learn more about the COVID19 Confirmed Cases for India. This link will be usually shared in my personal blog i.e.; <http://www.arunkoundinya.com>. For other elated blogs request to visit my blog page and post your comment there. 
 
 Source code will not be uploaded into the github account for this tab. Request to post your any improvement for my learning to my <a href="mailto:arun7106@icloud.com">E-Mail ID</a>
+
+### Basic TimeSeries Forecasting on Tests with Regression on Confirmed Cases
+
+As we learnt in India Scenario that more the tests more the confirmed cases. This is a base model which uses time-series forecasting model on Tests and then the output of tests is regressed to get the total confirmed cases.
+</br>
+</br>
+
+
+```{r echo=FALSE,fig.width=9.5,fig.height=7.5,message=FALSE,warning=FALSE,error=FALSE,eval=TRUE}
+
+RecoveredTotal<-subset(StatesDaily,StatesDaily$state=="Total")
+
+RecoveredTotal<-subset(RecoveredTotal,RecoveredTotal$states_daily.date %in% TestsDaily_TillToday_Incr$Date)
+
+PlottingFrame<-merge(ConfirmedbyState,TestsDaily_TillToday_Incr,by.x=c("states_daily.date","variable"),
+                     by.y=c("Date","variable"),all.x=TRUE)
+
+names(PlottingFrame)[2]<-"State"
+
+ForecastingFrame<-subset(PlottingFrame,PlottingFrame$State=="Total")
+ForecastingFrame<-merge(ForecastingFrame,RecoveredTotal[,c(2,6,7,8,9)],by.x="states_daily.date",by.y="states_daily.date",all.x=TRUE)
+ForecastingFrame$ActiveCases_SoFar<-ForecastingFrame$Confirmed_Cumsum-ForecastingFrame$Deceased_Cumsum-ForecastingFrame$Recovered_Cumsum
+
+rm(ClusterFrame,ConfirmedbyState,fig,hc.cut,LatLongMapper,PlottingFrame,RecoveredTotal,states,StatesDaily,Test,
+   TestsDaily,TestsDaily_TillToday,TestsDaily_TillToday_Incr,States_Daily_Geo,States)
+
+library(forecast)
+
+##Considering Upper Confidence Interval for Tests
+FutureTests<-as.data.frame(forecast(auto.arima(ForecastingFrame$Tests),15)$upper[,2])
+names(FutureTests)[1]<-"Tests"
+
+model<-lm(ConfirmedCases ~ Tests, ForecastingFrame)
+
+FuturePlotFrame<-data.frame(ConfirmedCases=predict(model,newdata = FutureTests))
+FuturePlotFrame$ConfirmedCases<-round(FuturePlotFrame$ConfirmedCases,0)
+FuturePlotFrame$TotalConfirmedCases<-ave(FuturePlotFrame$ConfirmedCases, FUN=cumsum)+ForecastingFrame$Confirmed_Cumsum[nrow(ForecastingFrame)]
+FuturePlotFrame$RecoveredCases<-round(as.numeric(forecast(auto.arima(ForecastingFrame$Recovered),15)$lower[,1]),0)
+FuturePlotFrame$RecoveredCases_Cumsum<-ave(FuturePlotFrame$RecoveredCases, FUN=cumsum)+ForecastingFrame$Recovered_Cumsum[nrow(ForecastingFrame)]
+FuturePlotFrame$Deaths<-round(as.numeric(forecast(auto.arima(diff(ForecastingFrame$Deceased_Cumsum)),15)$upper[,2]),0)
+FuturePlotFrame$TotalDeaths<-ave(FuturePlotFrame$Deaths, FUN=cumsum)+ForecastingFrame$Deceased_Cumsum[nrow(ForecastingFrame)]
+FuturePlotFrame$ActiveCases<-FuturePlotFrame$TotalConfirmedCases-FuturePlotFrame$TotalDeaths-FuturePlotFrame$RecoveredCases_Cumsum
+FuturePlotFrame$Date<-seq(Sys.Date(),Sys.Date()+14,by=1)
+FuturePlotFrame$ProbableHospitalCases<-round(FuturePlotFrame$ActiveCases*0.30,0)
+Fif_DayResult<-data.frame(Resulsts_15Days=t(FuturePlotFrame[15,])[c(8,2,7,6,9),])
+
+fig <- plot_ly(FuturePlotFrame, x = ~Date, y = ~TotalConfirmedCases, name = 'ConfirmedCases', type = 'scatter', mode = 'lines+markers') 
+fig <- fig %>% add_trace(y = ~ActiveCases, name = 'Active Cases', mode = 'lines+markers') 
+fig
+
+
+```
+
+Active Caes, Total Confirmed Cases, Total Deathson 15th day starting from today. As a rule based of current Asympotomatic, Mild Cases upon Hospitalized Cases. Required Hospitalized cases can be calculated as 30% of total Active Cases considering the same recovery rate for even hospitalized cases.
+<br>
+<br>
+
+```{r echo=FALSE,fig.width=9.5,fig.height=7.5,message=FALSE,warning=FALSE,error=FALSE,eval=TRUE}
+
+library(htmlTable)
+htmlTable(Fif_DayResult,
+          header =  paste(c("Results_15thDay_"), "FromToday"),
+          rnames = paste(c("Date", "ConfirmedCases_Total",
+                           "ActiveCases", "Deaths_Total","Hospitalized People"), "_15thDay"),
+          caption="Base Model Forecasting Summary on 15th Day from Today",
+          tfoot="&dagger; Hospitalized People are asummed as 30% of Actice Cases")
+
+
+```
+
+### SIRS Model with Undected Cases with revised transmission probability
+
+Initial parameters for the SIRS Model for the suspected pouplation is kept for all urban & metro cities and then by past trend it is seen that the testing is 20 times lower than expected. As SIRS Model is being considered as over optimistic the initial set variables play a huge role in terms of arriving at the Infected Inviduals. 
+
+Also, Active Cases is arrived as the present recovery trend instead to use SIRS Model.
+
+Note: There might be few changes as we learn during the pandemic course. The suggested model would certainly undergo changes on weekly basis.
+
+</br>
+</br>
+
+
+```{r echo=FALSE,fig.width=9.5,fig.height=7.5,message=FALSE,warning=FALSE,error=FALSE,eval=TRUE}
+
+sir_1 <- function(beta, gamma, S0, I0, R0, times) {
+  require(deSolve) # for the "ode" function
+  
+  # the differential equations:
+  sir_equations <- function(time, variables, parameters) {
+    with(as.list(c(variables, parameters)), {
+      dS <- -beta * I * S
+      dI <-  beta * I * S - gamma * I
+      dR <-  gamma * I
+      return(list(c(dS, dI, dR)))
+    })
+  }
+  
+  # the parameters values:
+  parameters_values <- c(beta  = beta, gamma = gamma)
+  
+  # the initial values of variables:
+  initial_values <- c(S = S0, I = I0, R = R0)
+  
+  # solving
+  out <- ode(initial_values, times, sir_equations, parameters_values)
+  
+  # returning the output:
+  as.data.frame(out)
+}
+
+contact_rate = (FuturePlotFrame$ConfirmedCases[1]*20)/10000000 # number of contacts per day
+transmission_probability = sum(ForecastingFrame$ConfirmedCases)*3/sum(ForecastingFrame$Tests)   # transmission probability
+infectious_period = 21          # infectious period
+
+sir_values_1<-sir_1(beta = contact_rate*transmission_probability, gamma = 1/infectious_period,
+                    S0 = (30-(ForecastingFrame$Confirmed_Cumsum[nrow(ForecastingFrame)]*20)/10000000), 
+                    I0 = (ForecastingFrame$Confirmed_Cumsum[nrow(ForecastingFrame)]*20)/10000000
+                                   , R0 = (ForecastingFrame$Recovered_Cumsum[nrow(ForecastingFrame)]*20)/10000000,
+                    times = seq(0, 40))
+
+
+sir_values_1$TotalConfirmedCases<-(sir_values_1$I*10000000)/20
+sir_values_1$RecoveredCases<-c(round(as.numeric(forecast(auto.arima(ForecastingFrame$Recovered),15)$mean),0),round(as.numeric(forecast(auto.arima(ForecastingFrame$Recovered),26)$upper[,1]),0))
+sir_values_1$RecoveredCases_Cumsum<-ave(sir_values_1$RecoveredCases, FUN=cumsum)+ForecastingFrame$Recovered_Cumsum[nrow(ForecastingFrame)]
+sir_values_1$Deaths<-round(as.numeric(forecast(auto.arima(diff(ForecastingFrame$Deceased_Cumsum)),41)$upper[,2]),0)
+sir_values_1$TotalDeaths<-ave(sir_values_1$Deaths, FUN=cumsum)+ForecastingFrame$Deceased_Cumsum[nrow(ForecastingFrame)]
+sir_values_1$ActiveCases<-sir_values_1$TotalConfirmedCases-sir_values_1$TotalDeaths-sir_values_1$RecoveredCases_Cumsum
+sir_values_1$TotalConfirmedCases<-round(sir_values_1$TotalConfirmedCases,0)
+sir_values_1$ActiveCases<-round(sir_values_1$ActiveCases,0)
+sir_values_1<-sir_values_1[-1,]
+
+sir_values_1$Date<-seq(Sys.Date(),Sys.Date()+39,by=1)
+sir_values_1$ProbableHospitalCases<-round(sir_values_1$ActiveCases*0.30,0)
+
+Fif_DayResult<-cbind(data.frame(Resulsts_15Days=t(sir_values_1[15,])[c(11,5,10,9,12),]),data.frame(Resulsts_15Days=t(sir_values_1[30,])[c(11,5,10,9,12),]),data.frame(Resulsts_15Days=t(sir_values_1[40,])[c(11,5,10,9,12),]))
+
+
+fig <- plot_ly(sir_values_1, x = ~Date, y = ~TotalConfirmedCases, name = 'ConfirmedCases', type = 'scatter', mode = 'lines+markers') 
+fig <- fig %>% add_trace(y = ~ActiveCases, name = 'Active Cases', mode = 'lines+markers') 
+fig
+
+
+```
+<br>
+<br>
+Quicky Summary on 15th, 30th & 40th Day Prediction for easy readability.
+<br>
+<br>
+
+```{r echo=FALSE,fig.width=9.5,fig.height=7.5,message=FALSE,warning=FALSE,error=FALSE,eval=TRUE}
+
+library(htmlTable)
+htmlTable(Fif_DayResult,
+          header =  paste(c("Results_15thDay_","Results_30thDay_","Results_40thDay_"), "FromToday | "),
+          rnames = paste(c("Date", "ConfirmedCases_Total",
+                           "ActiveCases", "Deaths_Total","Hospitalized People"), ""),
+          caption="Adjusted SIRs Model Forecasting Summary on nth Day from Today",
+          tfoot="&dagger; Hospitalized People are asummed as 30% of Actice Cases")
+
+
+```
+<br>
 
 Thanks a lot,
 Arun Koundinya
